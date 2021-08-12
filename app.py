@@ -1,8 +1,15 @@
 #!/usr/bin/env python
 # Using one of the example in https://dash.plotly.com/sharing-data-between-callbacks
 # as a base.
-
+#
+# Now we are adding an upload button https://dash.plotly.com/dash-core-components/upload
+# and make sure that the dataframe we got is convert to dict, so
+# we can store it in the browser using JSON format.
+#
+# During the parsing, we are also creating options for the dropdown button.
+import base64
 import os
+import io
 import copy
 import time
 import datetime
@@ -12,7 +19,7 @@ import dash_core_components as dcc
 import dash_html_components as html
 import numpy as np
 import pandas as pd
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 
 
 external_stylesheets = [
@@ -25,27 +32,27 @@ external_stylesheets = [
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 server = app.server
 
-N = 100
-
-df = pd.DataFrame(
-    {
-        "category": (
-            (["apples"] * 5 * N)
-            + (["oranges"] * 10 * N)
-            + (["figs"] * 20 * N)
-            + (["pineapples"] * 15 * N)
-        )
-    }
-)
-df["x"] = np.random.randn(len(df["category"]))
-df["y"] = np.random.randn(len(df["category"]))
 
 app.layout = html.Div(
     [
+        dcc.Upload(
+            id="upload-data",
+            children=html.Div(["Drag and Drop or ", html.A("Select Files")]),
+            style={
+                "width": "100%",
+                "height": "60px",
+                "lineHeight": "60px",
+                "borderWidth": "1px",
+                "borderStyle": "dashed",
+                "borderRadius": "5px",
+                "textAlign": "center",
+                "margin": "10px",
+            },
+            # Allow multiple files to be uploaded
+            multiple=True,
+        ),
         dcc.Dropdown(
             id="dropdown",
-            options=[{"label": i, "value": i} for i in df["category"].unique()],
-            value="apples",
         ),
         html.Div(
             [
@@ -62,100 +69,50 @@ app.layout = html.Div(
             className="row",
         ),
         # signal value to trigger callbacks
-        dcc.Store(id="signal"),
+        dcc.Store(id="uploaded-data"),
+        dcc.Store(id="sheet-list"),
     ]
 )
 
 
-def global_store(value):
-    # simulate expensive query
-    print("Computing value with {}".format(value))
-    time.sleep(5)
-    return df[df["category"] == value]
+def parse_contents(contents, filename, date):
+    content_type, content_string = contents.split(",")
+
+    decoded = base64.b64decode(content_string)
+    try:
+        dfs = pd.read_excel(io.BytesIO(decoded), sheet_name=None)
+        return dfs, None
+    except Exception as e:
+        print(e)
+        return None, html.Div(["There was an error processing this file."])
 
 
-def generate_figure(value, figure):
-    fig = copy.deepcopy(figure)
-    filtered_dataframe = global_store(value)
-    fig["data"][0]["x"] = filtered_dataframe["x"]
-    fig["data"][0]["y"] = filtered_dataframe["y"]
-    fig["layout"] = {"margin": {"l": 20, "r": 10, "b": 20, "t": 10}}
-    return fig
+@app.callback(
+    Output("uploaded-data", "data"),
+    Output("dropdown", "options"),
+    Input("upload-data", "contents"),
+    State("upload-data", "filename"),
+    State("upload-data", "last_modified"),
+)
+def update_output(list_of_contents, list_of_names, list_of_dates):
+    if list_of_contents is not None:
+        zipped_data = zip(list_of_contents, list_of_names, list_of_dates)
+        # Only consider one file.
+        c, n, d = next(zipped_data)
+        dfs, element = parse_contents(c, n, d)
+        if dfs is not None:
+            # Extract list of sheet names.
+            sheet_names = dfs.keys()
+            options = []
+            for name in sheet_names:
+                options.append({"label": name, "value": name})
 
-
-@app.callback(Output("signal", "data"), Input("dropdown", "value"))
-def compute_value(value):
-    # compute value and send a signal when done
-    global_store(value)
-    return value
-
-
-@app.callback(Output("graph-1", "figure"), Input("signal", "data"))
-def update_graph_1(value):
-    # generate_figure gets data from `global_store`.
-    # the data in `global_store` has already been computed
-    # by the `compute_value` callback and the result is stored
-    # in the global redis cached
-    return generate_figure(
-        value,
-        {
-            "data": [
-                {
-                    "type": "scatter",
-                    "mode": "markers",
-                    "marker": {
-                        "opacity": 0.5,
-                        "size": 14,
-                        "line": {"border": "thin darkgrey solid"},
-                    },
-                }
-            ]
-        },
-    )
-
-
-@app.callback(Output("graph-2", "figure"), Input("signal", "data"))
-def update_graph_2(value):
-    return generate_figure(
-        value,
-        {
-            "data": [
-                {
-                    "type": "scatter",
-                    "mode": "lines",
-                    "line": {"shape": "spline", "width": 0.5},
-                }
-            ]
-        },
-    )
-
-
-@app.callback(Output("graph-3", "figure"), Input("signal", "data"))
-def update_graph_3(value):
-    return generate_figure(
-        value,
-        {
-            "data": [
-                {
-                    "type": "histogram2d",
-                }
-            ]
-        },
-    )
-
-
-@app.callback(Output("graph-4", "figure"), Input("signal", "data"))
-def update_graph_4(value):
-    return generate_figure(
-        value,
-        {
-            "data": [
-                {
-                    "type": "histogram2dcontour",
-                }
-            ]
-        },
-    )
+            # Process each sheet into dict.
+            dicts = []
+            for sheet_name, df in dfs.items():
+                dicts.append({sheet_name: df.to_dict()})
+            return dicts, options
+    return None, []
 
 
 if __name__ == "__main__":
