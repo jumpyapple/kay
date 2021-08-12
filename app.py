@@ -7,6 +7,12 @@
 # we can store it in the browser using JSON format.
 #
 # During the parsing, we are also creating options for the dropdown button.
+#
+# And now we add a callback for the dropdown. It will use the value to
+# retrive the correct dictionary and recreate the DataFrame.
+#
+# We will then plot the figure and return it back for the update
+# of a `dcc.Graph`.
 import base64
 import os
 import io
@@ -19,6 +25,7 @@ import dash_core_components as dcc
 import dash_html_components as html
 import numpy as np
 import pandas as pd
+import plotly.express as px
 from dash.dependencies import Input, Output, State
 
 
@@ -108,11 +115,26 @@ def update_output(list_of_contents, list_of_names, list_of_dates):
                 options.append({"label": name, "value": name})
 
             # Process each sheet into dict.
-            dicts = []
+            dicts = {}
             for sheet_name, df in dfs.items():
-                dicts.append({sheet_name: df.to_dict()})
+                dicts[sheet_name] = df.to_dict()
             return dicts, options
     return None, []
+
+
+@app.callback(
+    Output("graph-1", "figure"),
+    Input("dropdown", "value"),
+    State("uploaded-data", "data"),
+    prevent_initial_call=True,
+)
+def generate_graph(value, dfs):
+    # Get the correct dataframe.
+    if dfs is not None:
+        df_dict = dfs[value]
+        df = pd.DataFrame.from_dict(df_dict)
+        fig = px.line(df, x="x", y="y")
+        return fig
 
 
 if __name__ == "__main__":
